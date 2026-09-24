@@ -1,0 +1,234 @@
+---
+# Declarative AirPrint print server for a USB printer on Raspberry Pi OS Lite (Trixie).
+# Dry run:  ansible-playbook site.yml --check --diff
+# Apply:    ansible-playbook site.yml
+
+- name: AirPrint print server
+  hosts: printsrv
+  become: true
+
+  handlers:
+    - name: Restart ssh
+      ansible.builtin.service:
+        name: ssh
+        state: restarted
+
+    - name: Restart cups
+      ansible.builtin.service:
+        name: cups
+        state: restarted
+
+    - name: Restart avahi
+      ansible.builtin.service:
+        name: avahi-daemon
+        state: restarted
+
+    - name: Reload NetworkManager
+      ansible.builtin.service:
+        name: NetworkManager
+        state: reloaded
+
+    - name: Reboot
+      ansible.builtin.reboot:
+        reboot_timeout: 600
+
+  tasks:
+    # ---------- Base system ----------
+    - name: Set timezone
+      community.general.timezone:
+        name: "{{ timezone }}"
+
+    - name: Upgrade system packages
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+        upgrade: safe
+
+    - name: Install packages
+      ansible.builtin.apt:
+        name: "{{ ['cups', 'cups-filters', 'avahi-daemon', 'ufw', 'unattended-upgrades', 'apt-listchanges'] + driver_packages }}"
+        state: present
+
+    - name: Disable Bluetooth (unused attack surface)
+      ansible.builtin.lineinfile:
+        path: /boot/firmware/config.txt
+        line: dtoverlay=disable-bt
+        insertafter: EOF
+      notify: Reboot
+
+    - name: Stop Bluetooth UART service
+      ansible.builtin.service:
+        name: hciuart
+        enabled: false
+        state: stopped
+      failed_when: false
+
+    - name: Disable Wi-Fi power saving (keeps mDNS/AirPrint reachable)
+      ansible.builtin.copy:
+        dest: /etc/NetworkManager/conf.d/10-wifi-powersave-off.conf
+        content: |
+          [connection]
+          wifi.powersave = 2
+        mode: "0644"
+      notify: Reload NetworkManager
+
+    # ---------- SSH hardening ----------
+    - name: Harden sshd
+      ansible.builtin.copy:
+        dest: /etc/ssh/sshd_config.d/10-hardening.conf
+        content: |
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+          PermitRootLogin no
+          AllowUsers {{ admin_user }}
+        mode: "0644"
+        validate: /usr/sbin/sshd -t -f %s
+      notify: Restart ssh
+
+    # ---------- Automatic security updates ----------
+    - name: Enable periodic unattended upgrades
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        content: |
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Unattended-Upgrade "1";
+        mode: "0644"
+
+    - name: Configure unattended-upgrades origins and reboot window
+      ansible.builtin.template:
+        src: 52unattended-upgrades-local.j2
+        dest: /etc/apt/apt.conf.d/52unattended-upgrades-local
+        mode: "0644"
+
+    # ---------- Firewall ----------
+    - name: Allow LAN-only services
+      community.general.ufw:
+        rule: allow
+        src: "{{ lan_cidr }}"
+        port: "{{ item.port }}"
+        proto: "{{ item.proto }}"
+        comment: "{{ item.comment }}"
+      loop:
+        - { port: "22", proto: tcp, comment: ssh }
+        - { port: "631", proto: tcp, comment: ipp-airprint }
+        - { port: "5353", proto: udp, comment: mdns }
+
+    - name: Deny everything else inbound and enable firewall
+      community.general.ufw:
+        state: enabled
+        direction: incoming
+        policy: deny
+
+    # ---------- mDNS ----------
+    - name: Advertise over IPv4 only (firewall rules are IPv4 LAN-only)
+      community.general.ini_file:
+        path: /etc/avahi/avahi-daemon.conf
+        section: "{{ item.section }}"
+        option: "{{ item.option }}"
+        value: "{{ item.value }}"
+        mode: "0644"
+      loop:
+        - { section: server, option: use-ipv6, value: "no" }
+        - { section: publish, option: publish-aaaa-on-ipv4, value: "no" }
+      notify: Restart avahi
+
+    - name: Enable Avahi
+      ansible.builtin.service:
+        name: avahi-daemon
+        enabled: true
+        state: started
+
+    # ---------- CUPS ----------
+    - name: Configure cupsd
+      ansible.builtin.template:
+        src: cupsd.conf.j2
+        dest: /etc/cups/cupsd.conf
+        owner: root
+        group: lp
+        mode: "0640"
+        validate: /usr/sbin/cupsd -t -c %s
+      notify: Restart cups
+
+    - name: Enable CUPS
+      ansible.builtin.service:
+        name: cups
+        enabled: true
+        state: started
+
+    - name: Apply pending service restarts before configuring the queue
+      ansible.builtin.meta: flush_handlers
+
+    # ---------- Printer queue ----------
+    - name: Discover USB printers
+      ansible.builtin.command: lpinfo --include-schemes usb -v
+      register: lpinfo_devices
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Discover drivers
+      ansible.builtin.command: lpinfo -m
+      register: lpinfo_models
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Resolve device URI and driver
+      vars:
+        uri_candidates: >-
+          {{ lpinfo_devices.stdout_lines | default([])
+             | select('search', '(?i)usb://.*' ~ printer_model_match)
+             | map('regex_replace', '^\S+\s+', '') | list }}
+        ppd_candidates: >-
+          {{ lpinfo_models.stdout_lines | default([])
+             | select('search', '(?i)' ~ printer_model_match)
+             | map('regex_replace', '\s.*$', '') | list }}
+        ppd_preferred: "{{ ppd_candidates | select('search', '(?i)foo2') | list }}"
+      ansible.builtin.set_fact:
+        printer_uri: "{{ uri_candidates | first | default('') }}"
+        printer_ppd_resolved: "{{ printer_ppd if printer_ppd | length > 0 else ((ppd_preferred + ppd_candidates) | first | default('')) }}"
+
+    - name: Show what will be used
+      ansible.builtin.debug:
+        msg:
+          - "Device: {{ printer_uri | default('NOT FOUND', true) }}"
+          - "Driver: {{ printer_ppd_resolved | default('NOT FOUND', true) }}"
+
+    - name: Require printer and driver
+      ansible.builtin.assert:
+        that:
+          - printer_uri | length > 0
+          - printer_ppd_resolved | length > 0
+        fail_msg: >-
+          Printer or driver not found. Check the printer is on and plugged into the Pi,
+          then run `lpinfo -v` and `lpinfo -m | grep -i {{ printer_model_match }}` on the Pi.
+          You can pin a driver with printer_ppd in group_vars/all.yml.
+      when: not ansible_check_mode
+
+    - name: Read current queue
+      ansible.builtin.command: lpstat -v {{ printer_name }}
+      register: lpstat_queue
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Create or update the queue
+      ansible.builtin.command: >-
+        lpadmin -p {{ printer_name }} -E
+        -v "{{ printer_uri }}"
+        -m "{{ printer_ppd_resolved }}"
+        -D "{{ printer_description }}"
+        -L "{{ printer_location }}"
+        -o printer-is-shared=true
+        -o PageSize={{ printer_paper_size }}
+      changed_when: true  # only runs when the queue is missing or points elsewhere
+      when: lpstat_queue.rc != 0 or printer_uri not in lpstat_queue.stdout
+
+    - name: Make it the default queue
+      ansible.builtin.command: lpadmin -d {{ printer_name }}
+      changed_when: false  # idempotent; re-asserted every run
+
+    - name: Ensure queue is enabled and accepting jobs
+      ansible.builtin.command: "{{ item }} {{ printer_name }}"
+      loop: [cupsenable, cupsaccept]
+      changed_when: false  # idempotent; re-asserted every run

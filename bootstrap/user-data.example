@@ -1,0 +1,23 @@
+#cloud-config
+# First-boot bootstrap for Raspberry Pi OS Lite (Trixie, cloud-init images from 2025-11-24 or newer).
+# Copy to the SD card's "bootfs" partition as `user-data` after flashing.
+# Scope is intentionally minimal: identity + SSH access. Everything else lives in Ansible.
+
+hostname: printsrv            # reachable as printsrv.local
+manage_etc_hosts: true
+timezone: Europe/Warsaw
+
+users:
+  - name: tomasz              # must match admin_user in ansible/group_vars/all.yml
+    groups: [sudo, lpadmin]
+    shell: /bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: true         # no password at all: key-only access
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAA_REPLACE_WITH_YOUR_PUBLIC_KEY you@your-mac
+
+ssh_pwauth: false
+disable_root: true
+
+runcmd:
+  - [systemctl, enable, --now, ssh]

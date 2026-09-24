@@ -1,0 +1,22 @@
+# Single source of truth for the print server. Edit, then `make plan` / `make apply`.
+
+admin_user: tomasz
+timezone: Europe/Warsaw
+
+# Only this network may reach SSH, IPP (631) and mDNS (5353). Match your router's LAN.
+lan_cidr: 192.168.1.0/24
+
+# Printer queue
+printer_name: LaserJet                      # shown on iPhones/Macs; no spaces
+printer_description: HP LaserJet Pro P1102w
+printer_location: Home
+printer_model_match: P1102                  # used to find the USB device and the driver
+printer_ppd: ""                             # leave empty to auto-pick; override with a value from `lpinfo -m`
+printer_paper_size: A4
+
+# Open-source host-based driver (foo2xqx). Add "hplip" only if foo2zjs output is wrong.
+driver_packages:
+  - printer-driver-foo2zjs
+
+# Security updates
+unattended_reboot_time: "04:00"

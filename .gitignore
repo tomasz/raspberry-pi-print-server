@@ -1,0 +1,7 @@
+# Filled-in bootstrap files contain your SSH key and Wi-Fi password: never commit them.
+bootstrap/user-data
+bootstrap/network-config
+
+# Ansible
+*.retry
+.ansible/

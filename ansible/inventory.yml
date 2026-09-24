@@ -1,0 +1,6 @@
+all:
+  hosts:
+    printsrv:
+      ansible_host: printsrv.local   # or the Pi's reserved IP, e.g. 192.168.1.60
+      ansible_user: tomasz
+      ansible_python_interpreter: /usr/bin/python3
