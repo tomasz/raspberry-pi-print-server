@@ -249,6 +249,7 @@
       loop: "{{ printer_options | dict2items }}"
       loop_control:
         label: "{{ item.key }}={{ item.value }}"
+      changed_when: true  # only runs for options whose default differs
       when: >-
         lpoptions_current.stdout_lines
         | select('match', item.key ~ '/')
