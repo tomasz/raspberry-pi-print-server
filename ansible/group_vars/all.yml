@@ -12,7 +12,12 @@ printer_description: HP LaserJet Pro P1102w
 printer_location: Home
 printer_model_match: P1102                  # used to find the USB device and the driver
 printer_ppd: ""                             # leave empty to auto-pick; override with a value from `lpinfo -m`
-printer_paper_size: A4
+
+# Queue defaults (driver options). List all choices on the Pi: lpoptions -p LaserJet -l
+printer_options:
+  PageSize: A4
+  Density: Density5                         # Density1 (lightest) … Density5 (darkest); Windows "Print Density"
+  Quality: normal                           # normal = 1200x600 dpi, the driver's maximum; draft = toner saver
 
 # Open-source host-based driver (foo2xqx). Add "hplip" only if foo2zjs output is wrong.
 driver_packages:

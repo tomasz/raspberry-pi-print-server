@@ -1,0 +1,2 @@
+# Start first-boot configuration as soon as an HP USB device appears (no-op once converged).
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="03f0", TAG+="systemd", ENV{SYSTEMD_WANTS}+="printsrv-firstboot.service"

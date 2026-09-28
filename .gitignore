@@ -5,3 +5,6 @@ bootstrap/network-config
 # Ansible
 *.retry
 .ansible/
+
+# SD card image builds (contain your Wi-Fi password)
+build/

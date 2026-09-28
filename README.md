@@ -3,27 +3,46 @@
 Declarative AirPrint print server for a USB-connected HP LaserJet Pro P1102w on a Raspberry Pi 3 A+.
 
 - **Bootstrap (cloud-init):** hostname, user, SSH key, Wi-Fi. Applied once on first boot.
-- **Configuration (Ansible):** CUPS + Avahi (AirPrint), open-source `foo2xqx` driver, LAN-only firewall, SSH hardening, automatic security updates. Idempotent; re-run anytime.
+- **Configuration (Ansible):** CUPS + Avahi (AirPrint), open-source `foo2zjs` driver, LAN-only firewall, SSH hardening, automatic security updates. Idempotent; re-run anytime.
 
 ## Prerequisites (on your Mac)
 
 ```bash
-brew install ansible
+brew install ansible             # only for `make apply` later; not needed to build the image
 ssh-keygen -t ed25519            # skip if ~/.ssh/id_ed25519.pub exists
 ```
 
-## 1. Flash the SD card
+Fill in the two bootstrap files. They are git-ignored.
 
-1. Raspberry Pi Imager → Device **Raspberry Pi 3** → OS **Raspberry Pi OS Lite (64-bit)** (Trixie) → your SD card.
-2. When asked about OS customisation, choose **No**. The files below replace it.
-3. Re-insert the card. Open the `bootfs` volume and overwrite:
-   - `user-data`: from `bootstrap/user-data.example`, with your public key (`cat ~/.ssh/id_ed25519.pub`).
-   - `network-config`: from `bootstrap/network-config.example`, with your Wi-Fi SSID and password.
+```bash
+cp bootstrap/user-data.example bootstrap/user-data              # paste your key: cat ~/.ssh/id_ed25519.pub
+cp bootstrap/network-config.example bootstrap/network-config    # Wi-Fi SSID and password
+```
 
-   Tip: `cp bootstrap/user-data.example bootstrap/user-data` (and the same for `network-config`) to keep filled-in copies locally. They are git-ignored.
-4. Eject, insert into the Pi, plug the printer into the Pi's USB port, power on. First boot takes 2–5 minutes.
+## 1. Build and flash the image
 
-## 2. Converge
+```bash
+make image    # ~5 min; needs Docker on Apple Silicon
+```
+
+1. Raspberry Pi Imager → Device **Raspberry Pi 3** → OS **Use custom** → `build/printsrv.img` → your SD card.
+2. When asked about OS customisation, choose **No**. Your settings are already in the image.
+3. Insert into the Pi, plug in the printer, power on.
+
+First boot configures everything by itself (a few minutes). If the printer is off or unplugged, it retries every 5 minutes and also as soon as the printer is plugged in. Check progress with `ssh printsrv.local journalctl -fu printsrv-firstboot`.
+
+`build/printsrv.img` contains your Wi-Fi password: don't share it.
+
+<details>
+<summary>Without the image (stock Raspberry Pi OS)</summary>
+
+1. Raspberry Pi Imager → **Raspberry Pi OS Lite (64-bit)** (Trixie), OS customisation **No**.
+2. Copy `bootstrap/user-data` and `bootstrap/network-config` onto the card's `bootfs` volume, replacing the ones there.
+3. Boot the Pi, wait 2–5 minutes, then `make deps` (once) and `make apply`.
+
+</details>
+
+## 2. Change settings later
 
 ```bash
 make deps     # once
@@ -32,7 +51,17 @@ make plan     # dry run, shows diffs
 make apply    # configure everything
 ```
 
-Edit `ansible/group_vars/all.yml` (LAN range, printer name, paper size) and `make apply` again for any change.
+Edit `ansible/group_vars/all.yml` (LAN range, printer name, print defaults) and `make apply` again for any change.
+
+### Print defaults
+
+Set in `printer_options`: A4, print density 5 (darkest), quality `normal` (1200×600 dpi, the driver's maximum). All choices: `ssh printsrv.local lpoptions -p LaserJet -l`.
+
+Not available with this driver:
+
+- **Jam recovery:** the driver turns it off in every job; reprinting jammed pages needs HP's Windows driver.
+- **Auto-Off:** stored in the printer, not the queue. Set it once from a Windows PC with HP's driver (Printer properties → Device Settings).
+- **Double-sided:** the printer has no duplexer. On a Mac: Print → Paper Handling → **Odd Only**, flip the stack, then **Even Only**. Test with a 4-page document first; if the backs come out in the wrong order, also set Page Order → **Reverse** for the second pass.
 
 ## 3. Use it
 

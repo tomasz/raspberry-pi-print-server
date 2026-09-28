@@ -1,0 +1,21 @@
+[Unit]
+Description=Configure the print server from the built-in Ansible playbook
+Documentation=file:///opt/printsrv/ansible/site.yml
+Wants=network-online.target
+After=network-online.target cloud-final.service
+# Runs until one full converge succeeds; `make apply` from the Mac takes over after that.
+ConditionPathExists=!/var/lib/printsrv/converged
+
+[Service]
+Type=oneshot
+StateDirectory=printsrv
+WorkingDirectory=/opt/printsrv/ansible
+ExecStart=/usr/bin/ansible-playbook site.yml -i printsrv, -c local --skip-tags upgrade
+ExecStartPost=/usr/bin/touch /var/lib/printsrv/converged
+# Fails while the printer is unplugged or off: retry, and the udev rule starts it on plug-in.
+Restart=on-failure
+RestartSec=5min
+TimeoutStartSec=30min
+
+[Install]
+WantedBy=multi-user.target

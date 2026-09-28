@@ -38,16 +38,19 @@
       community.general.timezone:
         name: "{{ timezone }}"
 
+    # Tags: the image build runs only `packages`; the Pi's first boot skips `upgrade` (works offline).
     - name: Upgrade system packages
       ansible.builtin.apt:
         update_cache: true
         cache_valid_time: 3600
         upgrade: safe
+      tags: [packages, upgrade]
 
     - name: Install packages
       ansible.builtin.apt:
         name: "{{ ['cups', 'cups-filters', 'avahi-daemon', 'ufw', 'unattended-upgrades', 'apt-listchanges'] + driver_packages }}"
         state: present
+      tags: [packages]
 
     - name: Disable Bluetooth (unused attack surface)
       ansible.builtin.lineinfile:
@@ -126,6 +129,7 @@
         section: "{{ item.section }}"
         option: "{{ item.option }}"
         value: "{{ item.value }}"
+        no_extra_spaces: true  # avahi rejects "key = value"
         mode: "0644"
       loop:
         - { section: server, option: use-ipv6, value: "no" }
@@ -220,9 +224,27 @@
         -D "{{ printer_description }}"
         -L "{{ printer_location }}"
         -o printer-is-shared=true
-        -o PageSize={{ printer_paper_size }}
       changed_when: true  # only runs when the queue is missing or points elsewhere
       when: lpstat_queue.rc != 0 or printer_uri not in lpstat_queue.stdout
+
+    - name: Read current queue defaults
+      ansible.builtin.command: lpoptions -p {{ printer_name }} -l
+      register: lpoptions_current
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    # lpoptions marks the current default with "*", e.g. "Density/Print Density: Density1 ... *Density3 ..."
+    - name: Set queue defaults
+      ansible.builtin.command: lpadmin -p {{ printer_name }} -o {{ item.key }}={{ item.value }}
+      loop: "{{ printer_options | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}={{ item.value }}"
+      when: >-
+        lpoptions_current.stdout_lines
+        | select('match', item.key ~ '/')
+        | select('search', '\*' ~ (item.value | regex_escape) ~ '(\s|$)')
+        | list | length == 0
 
     - name: Make it the default queue
       ansible.builtin.command: lpadmin -d {{ printer_name }}
