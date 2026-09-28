@@ -1,11 +1,6 @@
 network:
   version: 2
-  wifis:
-    renderer: NetworkManager
-    wlan0:
+  ethernets:
+    eth0:
       dhcp4: true
-      regulatory-domain: "PL"
-      access-points:
-        "YOUR_WIFI_SSID":
-          password: "YOUR_WIFI_PASSWORD"
-      optional: true
+      optional: false

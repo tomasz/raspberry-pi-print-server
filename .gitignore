@@ -1,4 +1,4 @@
-# Filled-in bootstrap files contain your SSH key and Wi-Fi password: never commit them.
+# Filled-in bootstrap files are personal (SSH key, network settings): keep them out of git.
 bootstrap/user-data
 bootstrap/network-config
 
@@ -6,5 +6,5 @@ bootstrap/network-config
 *.retry
 .ansible/
 
-# SD card image builds (contain your Wi-Fi password)
+# SD card image builds and download cache (large, personal)
 build/

@@ -23,14 +23,10 @@
         name: avahi-daemon
         state: restarted
 
-    - name: Reload NetworkManager
-      ansible.builtin.service:
-        name: NetworkManager
-        state: reloaded
-
     - name: Reboot
       ansible.builtin.reboot:
         reboot_timeout: 600
+      when: not (image_build | default(false))  # the image build pre-applies boot config; nothing to reboot
 
   tasks:
     # ---------- Base system ----------
@@ -52,12 +48,34 @@
         state: present
       tags: [packages]
 
+    # Tag `bootconfig`: also applied at image build time, so the first boot needs no reboot.
     - name: Disable Bluetooth (unused attack surface)
       ansible.builtin.lineinfile:
         path: /boot/firmware/config.txt
         line: dtoverlay=disable-bt
         insertafter: EOF
       notify: Reboot
+      tags: [bootconfig]
+
+    - name: Disable Wi-Fi (wired via PoE; unused attack surface)
+      ansible.builtin.lineinfile:
+        path: /boot/firmware/config.txt
+        line: dtoverlay=disable-wifi
+        insertafter: EOF
+      notify: Reboot
+      tags: [bootconfig]
+
+    - name: Quieter PoE+ HAT fan (starts at 65 °C instead of ~40 °C)
+      ansible.builtin.blockinfile:
+        path: /boot/firmware/config.txt
+        marker: "# {mark} ANSIBLE poe-fan"
+        block: |
+          dtparam=poe_fan_temp0=65000,poe_fan_temp0_hyst=5000
+          dtparam=poe_fan_temp1=70000,poe_fan_temp1_hyst=2000
+          dtparam=poe_fan_temp2=75000,poe_fan_temp2_hyst=2000
+          dtparam=poe_fan_temp3=80000,poe_fan_temp3_hyst=2000
+      notify: Reboot
+      tags: [bootconfig]
 
     - name: Stop Bluetooth UART service
       ansible.builtin.service:
@@ -65,15 +83,6 @@
         enabled: false
         state: stopped
       failed_when: false
-
-    - name: Disable Wi-Fi power saving (keeps mDNS/AirPrint reachable)
-      ansible.builtin.copy:
-        dest: /etc/NetworkManager/conf.d/10-wifi-powersave-off.conf
-        content: |
-          [connection]
-          wifi.powersave = 2
-        mode: "0644"
-      notify: Reload NetworkManager
 
     # ---------- SSH hardening ----------
     - name: Harden sshd

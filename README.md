@@ -1,9 +1,18 @@
 # raspberry-pi-print-server
 
-Declarative AirPrint print server for a USB-connected HP LaserJet Pro P1102w on a Raspberry Pi 3 A+.
+Declarative AirPrint print server for a USB-connected HP LaserJet Pro P1102w on a Raspberry Pi 3B+ powered over Ethernet (PoE).
 
-- **Bootstrap (cloud-init):** hostname, user, SSH key, Wi-Fi. Applied once on first boot.
+- **Bootstrap (cloud-init):** hostname, user, SSH key, wired network. Applied once on first boot.
 - **Configuration (Ansible):** CUPS + Avahi (AirPrint), open-source `foo2zjs` driver, LAN-only firewall, SSH hardening, automatic security updates. Idempotent; re-run anytime.
+
+## Hardware
+
+- Raspberry Pi 3B+ with the official **Raspberry Pi PoE+ HAT** (fits the 40-pin header and the 4-pin PoE header).
+- An **802.3af/at** PoE injector or PoE switch port. Not passive PoE.
+- One Ethernet cable from the injector to the Pi; no USB power supply (never both).
+- microSD card, 16 GB or larger, and the printer's USB cable.
+
+Wi-Fi and Bluetooth are switched off; the PoE+ HAT fan only spins up above 65 °C.
 
 ## Prerequisites (on your Mac)
 
@@ -16,7 +25,7 @@ Fill in the two bootstrap files. They are git-ignored.
 
 ```bash
 cp bootstrap/user-data.example bootstrap/user-data              # paste your key: cat ~/.ssh/id_ed25519.pub
-cp bootstrap/network-config.example bootstrap/network-config    # Wi-Fi SSID and password
+cp bootstrap/network-config.example bootstrap/network-config    # wired DHCP; edit only for a static IP
 ```
 
 ## 1. Build and flash the image
@@ -27,11 +36,11 @@ make image    # ~5 min; needs Docker on Apple Silicon
 
 1. Raspberry Pi Imager → Device **Raspberry Pi 3** → OS **Use custom** → `build/printsrv.img` → your SD card.
 2. When asked about OS customisation, choose **No**. Your settings are already in the image.
-3. Insert into the Pi, plug in the printer, power on.
+3. Insert into the Pi, plug in the printer, connect the PoE cable.
 
 First boot configures everything by itself (a few minutes). If the printer is off or unplugged, it retries every 5 minutes and also as soon as the printer is plugged in. Check progress with `ssh printsrv.local journalctl -fu printsrv-firstboot`.
 
-`build/printsrv.img` contains your Wi-Fi password: don't share it.
+`build/printsrv.img` contains your SSH public key and settings, no secrets.
 
 <details>
 <summary>Without the image (stock Raspberry Pi OS)</summary>
