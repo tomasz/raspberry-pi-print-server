@@ -19,9 +19,29 @@ printer_options:
   Density: Density5                         # Density1 (lightest) … Density5 (darkest); Windows "Print Density"
   Quality: normal                           # normal = 1200x600 dpi, the driver's maximum; draft = toner saver
 
-# Open-source host-based driver (foo2xqx). Add "hplip" only if foo2zjs output is wrong.
+# Open-source host-based driver (foo2zjs). Add "hplip" only if foo2zjs output is wrong.
 driver_packages:
   - printer-driver-foo2zjs
 
 # Security updates
 unattended_reboot_time: "04:00"
+
+# ---------- Hardening ----------
+# Outbound traffic from the Pi.
+#   restricted: only DNS, NTP, HTTP(S) for updates, DHCP and mDNS (default)
+#   open:       anything (use temporarily if you need to debug network access)
+egress_policy: restricted
+
+# The wired interface. Bonjour is advertised on this interface only.
+lan_interface: eth0
+
+# IPv6 on the LAN. Off by default: the firewall allow rules, Bonjour and CUPS access
+# are IPv4-only, so IPv6 would only add a second, routable address family.
+ipv6_enabled: false
+
+# Extra names clients may use to reach CUPS, besides <hostname> and <hostname>.local.
+# Add your router's DNS name if you print via it, e.g. printsrv.lan. IP addresses always work.
+cups_extra_server_aliases: []
+
+# Largest print job accepted, in MB.
+cups_max_job_size_mb: 100

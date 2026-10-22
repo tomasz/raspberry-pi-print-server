@@ -1,7 +1,7 @@
 .RECIPEPREFIX = >
 ANSIBLE_DIR := ansible
 
-.PHONY: deps ping plan apply image
+.PHONY: deps ping plan apply verify image
 
 deps:   ## Install Ansible collections
 > cd $(ANSIBLE_DIR) && ansible-galaxy collection install -r requirements.yml
@@ -14,6 +14,9 @@ plan:   ## Dry run: show what would change
 
 apply:  ## Converge the Pi to the declared state
 > cd $(ANSIBLE_DIR) && ansible-playbook site.yml --diff
+
+verify: ## Check the security posture and that printing is advertised
+> cd $(ANSIBLE_DIR) && ansible-playbook verify.yml
 
 image:  ## Build a ready-to-flash SD card image: build/printsrv.img (needs Docker, Apple Silicon)
 > mkdir -p build

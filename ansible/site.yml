@@ -7,7 +7,22 @@
   hosts: printsrv
   become: true
 
+  vars:
+    # Outbound traffic allowed when egress_policy is "restricted".
+    egress_allowed:
+      - { to_port: "53", proto: any, comment: dns }
+      - { to_port: "123", proto: udp, comment: ntp }
+      - { to_port: "80", proto: tcp, comment: apt-http }
+      - { to_port: "443", proto: tcp, comment: apt-https }
+      - { to_port: "67", proto: udp, comment: dhcp-renew }
+      - { to_port: "5353", proto: udp, comment: mdns-announce }
+      - { from_port: "5353", proto: udp, comment: mdns-unicast-reply }
+
   handlers:
+    - name: Apply sysctl
+      ansible.builtin.command: sysctl -e -p /etc/sysctl.d/90-hardening.conf  # -e: skip keys this kernel lacks
+      changed_when: true
+
     - name: Restart ssh
       ansible.builtin.service:
         name: ssh
@@ -42,10 +57,26 @@
         upgrade: safe
       tags: [packages, upgrade]
 
+    # No Recommends: they pull in cups-browsed, colord, dozens of unrelated printer
+    # drivers and more. The list below is the complete working print path.
     - name: Install packages
       ansible.builtin.apt:
-        name: "{{ ['cups', 'cups-filters', 'avahi-daemon', 'ufw', 'unattended-upgrades', 'apt-listchanges'] + driver_packages }}"
+        name: "{{ ['cups', 'cups-filters', 'avahi-daemon', 'avahi-utils', 'ufw', 'unattended-upgrades', 'apt-listchanges'] + driver_packages }}"
         state: present
+        install_recommends: false
+      tags: [packages]
+
+    - name: Remove radio and remote-access software
+      ansible.builtin.apt:
+        name:
+          - pi-bluetooth        # Bluetooth stack; the radio is off in config.txt
+          - bluez
+          - rpi-connect         # Raspberry Pi Connect: remote access via a cloud relay
+          - rpi-connect-lite
+          - modemmanager
+          - triggerhappy        # global hotkey daemon running as root
+        state: absent
+        purge: true
       tags: [packages]
 
     # Tag `bootconfig`: also applied at image build time, so the first boot needs no reboot.
@@ -77,25 +108,52 @@
       notify: Reboot
       tags: [bootconfig]
 
-    - name: Stop Bluetooth UART service
-      ansible.builtin.service:
-        name: hciuart
+    - name: Mask services for hardware that is switched off
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
         enabled: false
+        masked: true
         state: stopped
-      failed_when: false
+      loop: [hciuart.service, bluetooth.service, wpa_supplicant.service, ModemManager.service]
+      failed_when: false  # units that are not installed are fine
 
     # ---------- SSH hardening ----------
     - name: Harden sshd
       ansible.builtin.copy:
         dest: /etc/ssh/sshd_config.d/10-hardening.conf
         content: |
+          # {{ ansible_managed }}
+          # Key-only login for one user; no tunnels or forwarding of any kind.
+          AllowUsers {{ admin_user }}
+          AuthenticationMethods publickey
           PasswordAuthentication no
           KbdInteractiveAuthentication no
+          PermitEmptyPasswords no
           PermitRootLogin no
-          AllowUsers {{ admin_user }}
+          PermitUserEnvironment no
+          AllowTcpForwarding no
+          AllowStreamLocalForwarding no
+          AllowAgentForwarding no
+          X11Forwarding no
+          PermitTunnel no
+          GatewayPorts no
+          MaxAuthTries 3
+          MaxSessions 4
+          LoginGraceTime 20
+          ClientAliveInterval 300
+          ClientAliveCountMax 2
+          LogLevel VERBOSE
         mode: "0644"
         validate: /usr/sbin/sshd -t -f %s
       notify: Restart ssh
+
+    # ---------- Kernel ----------
+    - name: Harden kernel network and memory settings
+      ansible.builtin.template:
+        src: 90-hardening.conf.j2
+        dest: /etc/sysctl.d/90-hardening.conf
+        mode: "0644"
+      notify: Apply sysctl
 
     # ---------- Automatic security updates ----------
     - name: Enable periodic unattended upgrades
@@ -113,17 +171,35 @@
         mode: "0644"
 
     # ---------- Firewall ----------
+    # Inbound: SSH, IPP and mDNS from the LAN only; everything else dropped.
     - name: Allow LAN-only services
       community.general.ufw:
-        rule: allow
+        rule: "{{ item.rule }}"
         src: "{{ lan_cidr }}"
         port: "{{ item.port }}"
         proto: "{{ item.proto }}"
         comment: "{{ item.comment }}"
       loop:
-        - { port: "22", proto: tcp, comment: ssh }
-        - { port: "631", proto: tcp, comment: ipp-airprint }
-        - { port: "5353", proto: udp, comment: mdns }
+        # "limit" replaces an existing plain "allow" for the same port in place.
+        - { rule: limit, port: "22", proto: tcp, comment: ssh }  # max 6 new connections per 30 s
+        - { rule: allow, port: "631", proto: tcp, comment: ipp-airprint }
+        - { rule: allow, port: "5353", proto: udp, comment: mdns }
+
+    # Outbound: only what the Pi itself needs. A compromised print service cannot
+    # reach arbitrary hosts. Allowed before the default flips to deny, so a run
+    # never cuts off its own package downloads.
+    - name: Allow required outbound traffic
+      community.general.ufw:
+        rule: allow
+        direction: out
+        to_port: "{{ item.to_port | default(omit) }}"
+        from_port: "{{ item.from_port | default(omit) }}"
+        proto: "{{ item.proto }}"
+        comment: "{{ item.comment }}"
+      loop: "{{ egress_allowed }}"
+      loop_control:
+        label: "{{ item.comment }}"
+      when: egress_policy == 'restricted'
 
     - name: Deny everything else inbound and enable firewall
       community.general.ufw:
@@ -131,8 +207,18 @@
         direction: incoming
         policy: deny
 
+    - name: Set the outbound default  # noqa: args[module] -- value is templated
+      community.general.ufw:
+        direction: outgoing
+        policy: "{{ 'deny' if egress_policy == 'restricted' else 'allow' }}"
+
+    - name: Drop forwarded traffic (not a router)
+      community.general.ufw:
+        direction: routed
+        policy: deny
+
     # ---------- mDNS ----------
-    - name: Advertise over IPv4 only (firewall rules are IPv4 LAN-only)
+    - name: Limit Bonjour to the wired LAN, IPv4, and the printer only
       community.general.ini_file:
         path: /etc/avahi/avahi-daemon.conf
         section: "{{ item.section }}"
@@ -142,7 +228,27 @@
         mode: "0644"
       loop:
         - { section: server, option: use-ipv6, value: "no" }
+        - { section: server, option: allow-interfaces, value: "{{ lan_interface }}" }
+        - { section: wide-area, option: enable-wide-area, value: "no" }
         - { section: publish, option: publish-aaaa-on-ipv4, value: "no" }
+        - { section: publish, option: publish-hinfo, value: "no" }        # no CPU/OS fingerprint
+        - { section: publish, option: publish-workstation, value: "no" }
+        - { section: reflector, option: enable-reflector, value: "no" }
+      notify: Restart avahi
+
+    - name: Find other Bonjour advertisements (e.g. SSH, SFTP)
+      ansible.builtin.find:
+        paths: /etc/avahi/services
+        patterns: "*.service"
+      register: avahi_service_files
+
+    - name: Advertise the printer only
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ avahi_service_files.files }}"
+      loop_control:
+        label: "{{ item.path }}"
       notify: Restart avahi
 
     - name: Enable Avahi
@@ -167,6 +273,17 @@
         name: cups
         enabled: true
         state: started
+
+    # cups-browsed finds remote printers and adds them locally. This box only serves
+    # printers, and cups-browsed was the entry point of the 2024 CUPS remote code
+    # execution chain (CVE-2024-47176).
+    - name: Disable printer auto-discovery (cups-browsed)
+      ansible.builtin.systemd_service:
+        name: cups-browsed
+        enabled: false
+        masked: true
+        state: stopped
+      failed_when: false  # not installed is fine
 
     - name: Apply pending service restarts before configuring the queue
       ansible.builtin.meta: flush_handlers
@@ -264,3 +381,12 @@
       ansible.builtin.command: "{{ item }} {{ printer_name }}"
       loop: [cupsenable, cupsaccept]
       changed_when: false  # idempotent; re-asserted every run
+
+    # ---------- Bootstrap ----------
+    # cloud-init has done its one job (user, key, network). Disabling it stops the
+    # files on the SD card's boot partition from reconfiguring the Pi later.
+    - name: Disable cloud-init now that Ansible owns the configuration
+      ansible.builtin.copy:
+        content: "Disabled by Ansible: configuration is managed in git.\n"
+        dest: /etc/cloud/cloud-init.disabled
+        mode: "0644"

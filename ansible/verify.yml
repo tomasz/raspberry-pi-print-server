@@ -1,0 +1,157 @@
+---
+# Acceptance checks for the hardened print server. Read-only.
+# Run: ansible-playbook verify.yml   (or `make verify`)
+
+- name: Verify the print server's security posture
+  hosts: printsrv
+  become: true
+  gather_facts: false
+
+  tasks:
+    # ---------- Services ----------
+    - name: Collect service state
+      ansible.builtin.service_facts:
+
+    - name: Print services run; discovery and radio services do not
+      vars:
+        svc: "{{ ansible_facts.services }}"
+      ansible.builtin.assert:
+        that:
+          - svc['cups.service'].state == 'running'
+          - svc['avahi-daemon.service'].state == 'running'
+          - svc['cups-browsed.service'] is not defined or svc['cups-browsed.service'].state != 'running'
+          - svc['bluetooth.service'] is not defined or svc['bluetooth.service'].state != 'running'
+          - svc['wpa_supplicant.service'] is not defined or svc['wpa_supplicant.service'].state != 'running'
+        quiet: true
+
+    # ---------- Radios ----------
+    - name: Read network interfaces
+      ansible.builtin.command: ip -o link show
+      register: links
+      changed_when: false
+
+    - name: Read Bluetooth controllers
+      ansible.builtin.find:
+        paths: /sys/class/bluetooth
+        file_type: any
+      register: bt
+
+    - name: Wi-Fi and Bluetooth are off
+      ansible.builtin.assert:
+        that:
+          - links.stdout is not search('wlan')
+          - bt.matched == 0
+        quiet: true
+
+    # ---------- Network exposure ----------
+    - name: Read firewall state
+      ansible.builtin.command: ufw status verbose
+      register: ufw
+      changed_when: false
+
+    - name: Firewall denies by default in both directions
+      ansible.builtin.assert:
+        that:
+          - ufw.stdout is search('Status: active')
+          - ufw.stdout is search('deny \(incoming\)')
+          - egress_policy != 'restricted' or ufw.stdout is search('deny \(outgoing\)')
+        quiet: true
+
+    - name: Read TCP listeners
+      ansible.builtin.command: ss -H -ltn
+      register: tcp
+      changed_when: false
+
+    - name: Only SSH (22) and IPP (631) listen on the network
+      vars:
+        exposed: >-
+          {{ tcp.stdout_lines | map('split') | map(attribute=3)
+             | reject('match', '^(127\.|\[::1\]|::1)')
+             | map('regex_replace', '^.*:', '') | unique | sort }}
+      ansible.builtin.assert:
+        that: exposed | difference(['22', '631']) | length == 0
+        fail_msg: "Unexpected TCP listeners on ports {{ exposed | difference(['22', '631']) }}"
+        quiet: true
+
+    - name: Read IPv6 state
+      ansible.builtin.slurp:
+        src: /proc/sys/net/ipv6/conf/all/disable_ipv6
+      register: v6
+
+    - name: IPv6 matches ipv6_enabled
+      ansible.builtin.assert:
+        that: (v6.content | b64decode | trim) == ('0' if ipv6_enabled | bool else '1')
+        quiet: true
+
+    - name: Try an outbound connection that should be blocked (1.1.1.1:22)
+      ansible.builtin.command: timeout 4 bash -c '</dev/tcp/1.1.1.1/22'
+      register: egress_probe
+      changed_when: false
+      failed_when: false
+      when: egress_policy == 'restricted'
+
+    - name: Outbound traffic outside the allowlist is dropped
+      ansible.builtin.assert:
+        that: egress_probe.rc != 0
+        quiet: true
+      when: egress_policy == 'restricted'
+
+    # ---------- SSH ----------
+    - name: Read effective sshd settings
+      ansible.builtin.command: sshd -T
+      register: sshd
+      changed_when: false
+
+    - name: SSH is key-only, no root, no forwarding
+      ansible.builtin.assert:
+        that:
+          - sshd.stdout is search('(?m)^passwordauthentication no$')
+          - sshd.stdout is search('(?m)^kbdinteractiveauthentication no$')
+          - sshd.stdout is search('(?m)^permitrootlogin no$')
+          - sshd.stdout is search('(?m)^allowtcpforwarding no$')
+          - sshd.stdout is search('(?m)^authenticationmethods publickey$')
+        quiet: true
+
+    # ---------- CUPS, seen from your Mac (a LAN client) ----------
+    - name: CUPS rejects a foreign Host name (DNS-rebinding protection)
+      become: false
+      delegate_to: localhost
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}:631/printers/"
+        headers:
+          Host: "evil.example:631"
+        status_code: 400
+
+    - name: CUPS administration is closed to the LAN
+      become: false
+      delegate_to: localhost
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}:631/admin"
+        status_code: 403
+
+    # ---------- Printing still works ----------
+    - name: Read the print queue
+      ansible.builtin.command: lpstat -p {{ printer_name }} -a {{ printer_name }} -v {{ printer_name }}
+      register: queue
+      changed_when: false
+
+    - name: Queue is enabled, accepting jobs, and attached over USB
+      ansible.builtin.assert:
+        that:
+          - queue.stdout is search('enabled')
+          - queue.stdout is search('accepting requests')
+          - queue.stdout is search('usb://')
+        quiet: true
+
+    - name: Browse Bonjour for IPP printers
+      ansible.builtin.command: avahi-browse -rpt _ipp._tcp
+      register: dnssd
+      changed_when: false
+
+    - name: The printer is advertised as AirPrint-capable
+      ansible.builtin.assert:
+        that:
+          - dnssd.stdout is search(printer_name)
+          - dnssd.stdout is search('URF=')
+        fail_msg: "No AirPrint (URF) advertisement found for {{ printer_name }}."
+        quiet: true
