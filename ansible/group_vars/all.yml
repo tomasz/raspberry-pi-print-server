@@ -32,6 +32,10 @@ unattended_reboot_time: "04:00"
 #   open:       anything (use temporarily if you need to debug network access)
 egress_policy: restricted
 
+# IPv6 on the LAN. Off by default: the firewall allow rules, Bonjour and CUPS access
+# are IPv4-only, so IPv6 would only add a second, routable address family.
+ipv6_enabled: false
+
 # Extra names clients may use to reach CUPS, besides <hostname> and <hostname>.local.
 # Add your router's DNS name if you print via it, e.g. printsrv.lan. IP addresses always work.
 cups_extra_server_aliases: []
