@@ -7,6 +7,17 @@
   hosts: printsrv
   become: true
 
+  vars:
+    # Outbound traffic allowed when egress_policy is "restricted".
+    egress_allowed:
+      - { to_port: "53", proto: any, comment: dns }
+      - { to_port: "123", proto: udp, comment: ntp }
+      - { to_port: "80", proto: tcp, comment: apt-http }
+      - { to_port: "443", proto: tcp, comment: apt-https }
+      - { to_port: "67", proto: udp, comment: dhcp-renew }
+      - { to_port: "5353", proto: udp, comment: mdns-announce }
+      - { from_port: "5353", proto: udp, comment: mdns-unicast-reply }
+
   handlers:
     - name: Restart ssh
       ansible.builtin.service:
@@ -113,22 +124,50 @@
         mode: "0644"
 
     # ---------- Firewall ----------
+    # Inbound: SSH, IPP and mDNS from the LAN only; everything else dropped.
     - name: Allow LAN-only services
       community.general.ufw:
-        rule: allow
+        rule: "{{ item.rule }}"
         src: "{{ lan_cidr }}"
         port: "{{ item.port }}"
         proto: "{{ item.proto }}"
         comment: "{{ item.comment }}"
       loop:
-        - { port: "22", proto: tcp, comment: ssh }
-        - { port: "631", proto: tcp, comment: ipp-airprint }
-        - { port: "5353", proto: udp, comment: mdns }
+        # "limit" replaces an existing plain "allow" for the same port in place.
+        - { rule: limit, port: "22", proto: tcp, comment: ssh }  # max 6 new connections per 30 s
+        - { rule: allow, port: "631", proto: tcp, comment: ipp-airprint }
+        - { rule: allow, port: "5353", proto: udp, comment: mdns }
+
+    # Outbound: only what the Pi itself needs. A compromised print service cannot
+    # reach arbitrary hosts. Allowed before the default flips to deny, so a run
+    # never cuts off its own package downloads.
+    - name: Allow required outbound traffic
+      community.general.ufw:
+        rule: allow
+        direction: out
+        to_port: "{{ item.to_port | default(omit) }}"
+        from_port: "{{ item.from_port | default(omit) }}"
+        proto: "{{ item.proto }}"
+        comment: "{{ item.comment }}"
+      loop: "{{ egress_allowed }}"
+      loop_control:
+        label: "{{ item.comment }}"
+      when: egress_policy == 'restricted'
 
     - name: Deny everything else inbound and enable firewall
       community.general.ufw:
         state: enabled
         direction: incoming
+        policy: deny
+
+    - name: Set the outbound default  # noqa: args[module] -- value is templated
+      community.general.ufw:
+        direction: outgoing
+        policy: "{{ 'deny' if egress_policy == 'restricted' else 'allow' }}"
+
+    - name: Drop forwarded traffic (not a router)
+      community.general.ufw:
+        direction: routed
         policy: deny
 
     # ---------- mDNS ----------
