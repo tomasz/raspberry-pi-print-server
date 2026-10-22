@@ -32,6 +32,9 @@ unattended_reboot_time: "04:00"
 #   open:       anything (use temporarily if you need to debug network access)
 egress_policy: restricted
 
+# The wired interface. Bonjour is advertised on this interface only.
+lan_interface: eth0
+
 # IPv6 on the LAN. Off by default: the firewall allow rules, Bonjour and CUPS access
 # are IPv4-only, so IPv6 would only add a second, routable address family.
 ipv6_enabled: false

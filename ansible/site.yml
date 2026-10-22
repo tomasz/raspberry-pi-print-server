@@ -57,10 +57,26 @@
         upgrade: safe
       tags: [packages, upgrade]
 
+    # No Recommends: they pull in cups-browsed, colord, dozens of unrelated printer
+    # drivers and more. The list below is the complete working print path.
     - name: Install packages
       ansible.builtin.apt:
-        name: "{{ ['cups', 'cups-filters', 'avahi-daemon', 'ufw', 'unattended-upgrades', 'apt-listchanges'] + driver_packages }}"
+        name: "{{ ['cups', 'cups-filters', 'avahi-daemon', 'avahi-utils', 'ufw', 'unattended-upgrades', 'apt-listchanges'] + driver_packages }}"
         state: present
+        install_recommends: false
+      tags: [packages]
+
+    - name: Remove radio and remote-access software
+      ansible.builtin.apt:
+        name:
+          - pi-bluetooth        # Bluetooth stack; the radio is off in config.txt
+          - bluez
+          - rpi-connect         # Raspberry Pi Connect: remote access via a cloud relay
+          - rpi-connect-lite
+          - modemmanager
+          - triggerhappy        # global hotkey daemon running as root
+        state: absent
+        purge: true
       tags: [packages]
 
     # Tag `bootconfig`: also applied at image build time, so the first boot needs no reboot.
@@ -92,12 +108,14 @@
       notify: Reboot
       tags: [bootconfig]
 
-    - name: Stop Bluetooth UART service
-      ansible.builtin.service:
-        name: hciuart
+    - name: Mask services for hardware that is switched off
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
         enabled: false
+        masked: true
         state: stopped
-      failed_when: false
+      loop: [hciuart.service, bluetooth.service, wpa_supplicant.service, ModemManager.service]
+      failed_when: false  # units that are not installed are fine
 
     # ---------- SSH hardening ----------
     - name: Harden sshd
@@ -200,7 +218,7 @@
         policy: deny
 
     # ---------- mDNS ----------
-    - name: Advertise over IPv4 only (firewall rules are IPv4 LAN-only)
+    - name: Limit Bonjour to the wired LAN, IPv4, and the printer only
       community.general.ini_file:
         path: /etc/avahi/avahi-daemon.conf
         section: "{{ item.section }}"
@@ -210,7 +228,27 @@
         mode: "0644"
       loop:
         - { section: server, option: use-ipv6, value: "no" }
+        - { section: server, option: allow-interfaces, value: "{{ lan_interface }}" }
+        - { section: wide-area, option: enable-wide-area, value: "no" }
         - { section: publish, option: publish-aaaa-on-ipv4, value: "no" }
+        - { section: publish, option: publish-hinfo, value: "no" }        # no CPU/OS fingerprint
+        - { section: publish, option: publish-workstation, value: "no" }
+        - { section: reflector, option: enable-reflector, value: "no" }
+      notify: Restart avahi
+
+    - name: Find other Bonjour advertisements (e.g. SSH, SFTP)
+      ansible.builtin.find:
+        paths: /etc/avahi/services
+        patterns: "*.service"
+      register: avahi_service_files
+
+    - name: Advertise the printer only
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ avahi_service_files.files }}"
+      loop_control:
+        label: "{{ item.path }}"
       notify: Restart avahi
 
     - name: Enable Avahi
@@ -343,3 +381,12 @@
       ansible.builtin.command: "{{ item }} {{ printer_name }}"
       loop: [cupsenable, cupsaccept]
       changed_when: false  # idempotent; re-asserted every run
+
+    # ---------- Bootstrap ----------
+    # cloud-init has done its one job (user, key, network). Disabling it stops the
+    # files on the SD card's boot partition from reconfiguring the Pi later.
+    - name: Disable cloud-init now that Ansible owns the configuration
+      ansible.builtin.copy:
+        content: "Disabled by Ansible: configuration is managed in git.\n"
+        dest: /etc/cloud/cloud-init.disabled
+        mode: "0644"
