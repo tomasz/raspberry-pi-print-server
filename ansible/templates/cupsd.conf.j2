@@ -8,7 +8,10 @@ PageLogFormat
 # Listen on all interfaces; the firewall (ufw) restricts access to {{ lan_cidr }}.
 Port 631
 Listen /run/cups/cups.sock
-ServerAlias *
+
+# Answer only to this box's own names (IP addresses always work). Blocks DNS
+# rebinding: a web page cannot point a hostile name at the Pi and drive CUPS.
+ServerAlias {{ ([ansible_facts.hostname, ansible_facts.hostname ~ '.local'] + cups_extra_server_aliases) | join(' ') }}
 
 # Advertise shared queues via DNS-SD (mDNS) so iOS/macOS see them as AirPrint.
 Browsing On
@@ -19,28 +22,40 @@ DefaultShared Yes
 IdleExitTimeout 0
 
 DefaultAuthType Basic
+DefaultEncryption IfRequested
 WebInterface Yes
 
+# Privacy: no copies of printed documents and no job history are kept on disk.
+PreserveJobFiles No
+PreserveJobHistory No
+MaxJobs 100
+LimitRequestBody {{ cups_max_job_size_mb * 1024 * 1024 }}
+
+# Printing and the read-only status page: LAN only (same range as the firewall).
 <Location />
   Order allow,deny
-  Allow @LOCAL
+  Allow localhost
+  Allow {{ lan_cidr }}
 </Location>
 
+# Administration: only from the Pi itself. Changes go through Ansible.
 <Location /admin>
   Order allow,deny
-  Allow @LOCAL
+  Allow localhost
 </Location>
 
 <Location /admin/conf>
   AuthType Default
   Require user @SYSTEM
   Order allow,deny
+  Allow localhost
 </Location>
 
 <Location /admin/log>
   AuthType Default
   Require user @SYSTEM
   Order allow,deny
+  Allow localhost
 </Location>
 
 <Policy default>

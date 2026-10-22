@@ -19,9 +19,17 @@ printer_options:
   Density: Density5                         # Density1 (lightest) … Density5 (darkest); Windows "Print Density"
   Quality: normal                           # normal = 1200x600 dpi, the driver's maximum; draft = toner saver
 
-# Open-source host-based driver (foo2xqx). Add "hplip" only if foo2zjs output is wrong.
+# Open-source host-based driver (foo2zjs). Add "hplip" only if foo2zjs output is wrong.
 driver_packages:
   - printer-driver-foo2zjs
 
 # Security updates
 unattended_reboot_time: "04:00"
+
+# ---------- Hardening ----------
+# Extra names clients may use to reach CUPS, besides <hostname> and <hostname>.local.
+# Add your router's DNS name if you print via it, e.g. printsrv.lan. IP addresses always work.
+cups_extra_server_aliases: []
+
+# Largest print job accepted, in MB.
+cups_max_job_size_mb: 100

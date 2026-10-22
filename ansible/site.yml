@@ -168,6 +168,17 @@
         enabled: true
         state: started
 
+    # cups-browsed finds remote printers and adds them locally. This box only serves
+    # printers, and cups-browsed was the entry point of the 2024 CUPS remote code
+    # execution chain (CVE-2024-47176).
+    - name: Disable printer auto-discovery (cups-browsed)
+      ansible.builtin.systemd_service:
+        name: cups-browsed
+        enabled: false
+        masked: true
+        state: stopped
+      failed_when: false  # not installed is fine
+
     - name: Apply pending service restarts before configuring the queue
       ansible.builtin.meta: flush_handlers
 
