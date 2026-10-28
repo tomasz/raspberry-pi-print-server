@@ -6,6 +6,8 @@
 - name: AirPrint print server
   hosts: printsrv
   become: true
+  environment:
+    LC_ALL: C.UTF-8  # command output is parsed below; keep it untranslated
 
   handlers:
     - name: Restart ssh
@@ -303,25 +305,29 @@
           You can pin a driver with printer_ppd in group_vars/all.yml.
       when: not ansible_check_mode
 
-    # Device URI, description, location and the installed PPD's model name, one per line.
+    # cupsd persists each queue in printers.conf, one attribute per line (written up to 30 s after a change).
     # Empty when the queue does not exist.
     - name: Read current queue
-      ansible.builtin.shell: |
-        lpstat -v {{ printer_name }} 2>/dev/null
-        lpstat -l -p {{ printer_name }} 2>/dev/null
-        sed -n 's/^\*NickName: *"\(.*\)"/model: \1/p' /etc/cups/ppd/{{ printer_name }}.ppd 2>/dev/null
-        true
+      ansible.builtin.command: awk '/^<Printer {{ printer_name }}>$/,/^<\/Printer>$/' /etc/cups/printers.conf
       register: queue_state
       changed_when: false
+      failed_when: false
       check_mode: false
 
     - name: Create or update the queue
       vars:
-        # `lpinfo -m` prints "<ppd-name> <model description>"; the installed PPD's *NickName matches the description.
+        # `lpinfo -m` prints "<ppd-name> <model description>"; cupsd stores the description as MakeModel.
         ppd_model: >-
           {{ lpinfo_models.stdout_lines | default([])
              | select('match', (printer_ppd_resolved | regex_escape) ~ '\s')
              | map('regex_replace', '^\S+\s+', '') | first | default('') }}
+        declared:
+          - "DeviceURI {{ printer_uri }}"
+          - "Info {{ printer_description }}"
+          - "Location {{ printer_location }}"
+          - "MakeModel {{ ppd_model }}"
+          - "Shared Yes"
+          - "ErrorPolicy retry-job"  # without it one failed backend run stops the queue for good
       ansible.builtin.command: >-
         lpadmin -p {{ printer_name }} -E
         -v "{{ printer_uri }}"
@@ -331,24 +337,7 @@
         -o printer-is-shared=true
         -o printer-error-policy=retry-job
       changed_when: true  # only runs when the queue is missing or any declared attribute differs
-      when: >-
-        printer_uri not in queue_state.stdout
-        or ('Description: ' ~ printer_description) not in queue_state.stdout
-        or ('Location: ' ~ printer_location) not in queue_state.stdout
-        or ('model: ' ~ ppd_model) not in queue_state.stdout
-
-    - name: Read queue attributes
-      ansible.builtin.command: lpoptions -p {{ printer_name }}
-      register: queue_attrs
-      changed_when: false
-      failed_when: false
-      check_mode: false
-
-    # Without this, one failed backend run stops the queue for good ("Printer paused" on every device).
-    - name: Retry failed jobs instead of stopping the queue
-      ansible.builtin.command: lpadmin -p {{ printer_name }} -o printer-error-policy=retry-job
-      changed_when: true  # only runs when the policy differs
-      when: "'printer-error-policy=retry-job' not in queue_attrs.stdout"
+      when: declared | difference(queue_state.stdout_lines) | length > 0
 
     - name: Read current queue defaults
       ansible.builtin.command: lpoptions -p {{ printer_name }} -l
