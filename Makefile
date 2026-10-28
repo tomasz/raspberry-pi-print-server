@@ -1,6 +1,5 @@
 .RECIPEPREFIX = >
 ANSIBLE_DIR := ansible
-PRINTER     ?= $(shell awk '$$1 == "printer_name:" {print $$2}' $(ANSIBLE_DIR)/group_vars/all.yml)
 HOST        ?= $(shell awk '$$1 == "ansible_host:" {print $$2}' $(ANSIBLE_DIR)/inventory.yml)
 # Base image. Release URLs are immutable, so a dated URL pins the build; `_latest` floats.
 # Pattern: https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-<DATE>/<DATE>-raspios-trixie-arm64-lite.img.xz
@@ -37,10 +36,10 @@ logs:   ## Last 100 lines from CUPS, first boot and automatic updates
 > cd $(ANSIBLE_DIR) && ansible printsrv -b -m shell -a 'journalctl -u cups -u printsrv-firstboot -u apt-daily-upgrade -n 100 --no-pager'
 
 unjam:  ## Cancel every job and re-enable the queue
-> cd $(ANSIBLE_DIR) && ansible printsrv -b -m shell -a 'cancel -a $(PRINTER); cupsenable $(PRINTER); cupsaccept $(PRINTER); lpstat -p $(PRINTER)'
+> cd $(ANSIBLE_DIR) && ansible printsrv -b -m shell -a 'cancel -a {{ printer_name }}; cupsenable {{ printer_name }}; cupsaccept {{ printer_name }}; lpstat -p {{ printer_name }}'
 
 testpage: ## Print the CUPS test page
-> cd $(ANSIBLE_DIR) && ansible printsrv -b -m shell -a 'lp -d $(PRINTER) /usr/share/cups/data/testprint'
+> cd $(ANSIBLE_DIR) && ansible printsrv -b -m shell -a 'lp -d {{ printer_name }} /usr/share/cups/data/testprint'
 
 usb-cycle: ## Power-cycle the Pi's USB ports (resets the printer's USB link; see README before using remotely)
 > cd $(ANSIBLE_DIR) && ansible printsrv -b -m shell -a 'uhubctl -l 1-1 -a cycle'
@@ -58,6 +57,6 @@ image:  ## Build a ready-to-flash SD card image: build/printsrv.img (needs Docke
 >   -v "$(CURDIR)":/src:ro -v "$(CURDIR)/build":/build -e PIOS_URL=$(PIOS_URL) \
 >   $(BUILD_IMAGE) bash /src/image/build.sh
 
-lint:   ## ansible-lint, shellcheck, playbook syntax check (same as CI)
-> cd $(ANSIBLE_DIR) && ansible-lint site.yml && ansible-playbook --syntax-check -i printsrv, site.yml
+lint:   ## ansible-lint (includes a syntax check) and shellcheck, same as CI
+> cd $(ANSIBLE_DIR) && ansible-lint site.yml
 > shellcheck image/build.sh

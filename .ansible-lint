@@ -1,5 +1,2 @@
 # `make lint` and CI. Keep the playbook at the strictest profile.
 profile: production
-exclude_paths:
-  - build/
-  - .ansible/
