@@ -20,6 +20,16 @@ for f in user-data network-config; do
 done
 grep -q AAAA_REPLACE "$SRC/bootstrap/user-data" && die "bootstrap/user-data still has the placeholder SSH key."
 
+# Lockout guards: sshd will only accept admin_user, and the firewall only lan_cidr. Neither can be
+# fixed remotely if wrong, so refuse to build an image that would strand you.
+yaml_scalar() { awk -v k="$2" '$1 == k":" { sub(/[[:space:]]*#.*$/, ""); print $2; exit }' "$1"; }
+admin=$(yaml_scalar "$SRC/ansible/group_vars/all.yml" admin_user)
+grep -Eq "^[[:space:]]*-[[:space:]]*name:[[:space:]]*${admin}([[:space:]]|$)" "$SRC/bootstrap/user-data" \
+  || die "bootstrap/user-data must create user '$admin' (admin_user in ansible/group_vars/all.yml); sshd only admits that user."
+lan=$(yaml_scalar "$SRC/ansible/group_vars/all.yml" lan_cidr)
+[[ "$lan" =~ ^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)[0-9.]+/[0-9]+$ ]] \
+  || die "lan_cidr '$lan' is not a private (RFC 1918) range; the firewall would lock you out."
+
 log "Installing build tools"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
