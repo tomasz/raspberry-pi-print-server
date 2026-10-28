@@ -10,7 +10,7 @@ ConditionPathExists=!/var/lib/printsrv/converged
 Type=oneshot
 StateDirectory=printsrv
 WorkingDirectory=/opt/printsrv/ansible
-ExecStart=/usr/bin/ansible-playbook site.yml -i printsrv, -c local --skip-tags upgrade
+ExecStart=/usr/bin/ansible-playbook site.yml -i printsrv, -c local
 ExecStartPost=/usr/bin/touch /var/lib/printsrv/converged
 # Fails while the printer is unplugged or off: retry, and the udev rule starts it on plug-in.
 Restart=on-failure
