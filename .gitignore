@@ -1,7 +1,3 @@
-# Filled-in bootstrap files are personal (SSH key, network settings): keep them out of git.
-bootstrap/user-data
-bootstrap/network-config
-
 # Ansible
 *.retry
 .ansible/

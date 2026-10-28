@@ -21,7 +21,7 @@ brew install ansible             # only for `make apply` later; not needed to bu
 ssh-keygen -t ed25519            # skip if ~/.ssh/id_ed25519.pub exists
 ```
 
-Fill in the two bootstrap files. They are git-ignored.
+Fill in the two bootstrap files and commit them: they hold only your SSH public key and a DHCP setting, and with them in git this repository is everything needed to rebuild the Pi. (Add them to `.gitignore` instead if you intend to publish this repository as a template.)
 
 ```bash
 cp bootstrap/user-data.example bootstrap/user-data              # paste your key: cat ~/.ssh/id_ed25519.pub
