@@ -8,8 +8,7 @@ SRC=/src
 OUT=/build
 ROOT=/mnt/root
 IMG="$OUT/printsrv.img"
-PIOS_URL="${PIOS_URL:-https://downloads.raspberrypi.com/raspios_lite_arm64_latest}"
-LOCK="$SRC/image/base-image.lock"   # written by `make image-lock`: the exact release and checksum to build from
+PIOS_URL="${PIOS_URL:?set by the Makefile}"   # a dated release URL pins the base image; `_latest` floats
 GROW_ROOT_MB="${GROW_ROOT_MB:-1536}"
 
 log() { printf '\n==> %s\n' "$*"; }
@@ -23,32 +22,31 @@ grep -q AAAA_REPLACE "$SRC/bootstrap/user-data" && die "bootstrap/user-data stil
 
 # Lockout guards: sshd will only accept admin_user, and the firewall only lan_cidr. Neither can be
 # fixed remotely if wrong, so refuse to build an image that would strand you.
-yaml_scalar() { awk -v k="$2" '$1 == k":" { sub(/[[:space:]]*#.*$/, ""); print $2; exit }' "$1"; }
+yaml_scalar() { awk -v k="$2" '$1 == k":" { sub(/[[:space:]]*#.*$/, ""); gsub(/^["'\'']|["'\'']$/, "", $2); print $2; exit }' "$1"; }
 admin=$(yaml_scalar "$SRC/ansible/group_vars/all.yml" admin_user)
+[[ -n "$admin" ]] || die "admin_user is empty in ansible/group_vars/all.yml."
 grep -Eq "^[[:space:]]*-[[:space:]]*name:[[:space:]]*${admin}([[:space:]]|$)" "$SRC/bootstrap/user-data" \
   || die "bootstrap/user-data must create user '$admin' (admin_user in ansible/group_vars/all.yml); sshd only admits that user."
 lan=$(yaml_scalar "$SRC/ansible/group_vars/all.yml" lan_cidr)
 [[ "$lan" =~ ^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)[0-9.]+/[0-9]+$ ]] \
   || die "lan_cidr '$lan' is not a private (RFC 1918) range; the firewall would lock you out."
+# A static address in network-config must lie inside lan_cidr, or ufw admits nobody.
+ip2int() { local IFS=.; read -r a b c d <<<"$1"; echo $(( (a << 24) | (b << 16) | (c << 8) | d )); }
+mask=$(( 0xFFFFFFFF << (32 - ${lan#*/}) & 0xFFFFFFFF ))
+while read -r addr; do
+  (( ($(ip2int "${addr%/*}") & mask) == ($(ip2int "${lan%/*}") & mask) )) \
+    || die "network-config address $addr is outside lan_cidr $lan; the firewall would lock you out."
+done < <(grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]+' "$SRC/bootstrap/network-config" || true)
 
 log "Installing build tools"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends ca-certificates curl xz-utils fdisk e2fsprogs >/dev/null
 
-# ---------- Base image (pinned by image/base-image.lock; cached in build/cache) ----------
+# ---------- Base image (cached in build/cache, checksum-verified) ----------
 mkdir -p "$OUT/cache"
-if [[ -f "$LOCK" ]]; then
-  url=$(sed -n 's/^url=//p' "$LOCK")
-  expected=$(sed -n 's/^sha256=//p' "$LOCK")
-  [[ -n "$url" && -n "$expected" ]] || die "image/base-image.lock is malformed; run \`make image-lock\`."
-  log "Base image pinned by image/base-image.lock: $(basename "$url")"
-else
-  printf 'WARNING: image/base-image.lock missing; using the newest Raspberry Pi OS release.\n' >&2
-  printf '         Run make image-lock and commit the result for reproducible builds.\n' >&2
-  url=$(curl -fsSIL -o /dev/null -w '%{url_effective}' "$PIOS_URL")
-  expected=$(curl -fsSL "$url.sha256" | awk '{print $1}')
-fi
+url=$(curl -fsSIL -o /dev/null -w '%{url_effective}' "$PIOS_URL")
+expected=$(curl -fsSL "$url.sha256" | awk '{print $1}')
 base="$OUT/cache/$(basename "$url")"
 if [[ ! -f "$base" ]]; then
   log "Downloading $(basename "$url")"
