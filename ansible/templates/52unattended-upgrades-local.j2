@@ -1,4 +1,6 @@
 // {{ ansible_managed }}
+// apt.conf lists append across files; clear Debian's default list so this one is authoritative.
+#clear Unattended-Upgrade::Origins-Pattern;
 Unattended-Upgrade::Origins-Pattern {
         "origin=Debian,codename=${distro_codename},label=Debian";
         "origin=Debian,codename=${distro_codename}-updates,label=Debian";
