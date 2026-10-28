@@ -18,6 +18,13 @@ DefaultShared Yes
 # Never exit when idle: an exited cupsd stops answering IPP and drops its mDNS adverts.
 IdleExitTimeout 0
 
+# A backend failure mid-job (USB glitch, printer reset after a jam) retries the job instead of
+# stopping the queue. The CUPS default, stop-printer, leaves every client showing "Printer paused"
+# until someone runs cupsenable. After JobRetryLimit attempts only that job is aborted.
+ErrorPolicy retry-job
+JobRetryInterval 60
+JobRetryLimit 10
+
 DefaultAuthType Basic
 WebInterface Yes
 

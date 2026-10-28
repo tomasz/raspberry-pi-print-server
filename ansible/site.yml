@@ -218,14 +218,25 @@
           You can pin a driver with printer_ppd in group_vars/all.yml.
       when: not ansible_check_mode
 
+    # Device URI, description, location and the installed PPD's model name, one per line.
+    # Empty when the queue does not exist.
     - name: Read current queue
-      ansible.builtin.command: lpstat -v {{ printer_name }}
-      register: lpstat_queue
+      ansible.builtin.shell: |
+        lpstat -v {{ printer_name }} 2>/dev/null
+        lpstat -l -p {{ printer_name }} 2>/dev/null
+        sed -n 's/^\*NickName: *"\(.*\)"/model: \1/p' /etc/cups/ppd/{{ printer_name }}.ppd 2>/dev/null
+        true
+      register: queue_state
       changed_when: false
-      failed_when: false
       check_mode: false
 
     - name: Create or update the queue
+      vars:
+        # `lpinfo -m` prints "<ppd-name> <model description>"; the installed PPD's *NickName matches the description.
+        ppd_model: >-
+          {{ lpinfo_models.stdout_lines | default([])
+             | select('match', (printer_ppd_resolved | regex_escape) ~ '\s')
+             | map('regex_replace', '^\S+\s+', '') | first | default('') }}
       ansible.builtin.command: >-
         lpadmin -p {{ printer_name }} -E
         -v "{{ printer_uri }}"
@@ -233,8 +244,26 @@
         -D "{{ printer_description }}"
         -L "{{ printer_location }}"
         -o printer-is-shared=true
-      changed_when: true  # only runs when the queue is missing or points elsewhere
-      when: lpstat_queue.rc != 0 or printer_uri not in lpstat_queue.stdout
+        -o printer-error-policy=retry-job
+      changed_when: true  # only runs when the queue is missing or any declared attribute differs
+      when: >-
+        printer_uri not in queue_state.stdout
+        or ('Description: ' ~ printer_description) not in queue_state.stdout
+        or ('Location: ' ~ printer_location) not in queue_state.stdout
+        or ('model: ' ~ ppd_model) not in queue_state.stdout
+
+    - name: Read queue attributes
+      ansible.builtin.command: lpoptions -p {{ printer_name }}
+      register: queue_attrs
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    # Without this, one failed backend run stops the queue for good ("Printer paused" on every device).
+    - name: Retry failed jobs instead of stopping the queue
+      ansible.builtin.command: lpadmin -p {{ printer_name }} -o printer-error-policy=retry-job
+      changed_when: true  # only runs when the policy differs
+      when: "'printer-error-policy=retry-job' not in queue_attrs.stdout"
 
     - name: Read current queue defaults
       ansible.builtin.command: lpoptions -p {{ printer_name }} -l
