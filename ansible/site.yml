@@ -44,13 +44,14 @@
       community.general.timezone:
         name: "{{ timezone }}"
 
-    # Tags: the image build runs only `packages`; the Pi's first boot skips `upgrade` (works offline).
+    # Runs only when asked for by tag: at image build time (`packages`) and from `make upgrade`.
+    # Day to day, unattended-upgrades keeps the Pi current; a plain `make apply` stays fast.
     - name: Upgrade system packages
       ansible.builtin.apt:
         update_cache: true
         cache_valid_time: 3600
         upgrade: safe
-      tags: [packages, upgrade]
+      tags: [never, packages, upgrade]
 
     # cups-browsed (remote printer discovery, CVE-2024-47176) listens on UDP 631 and is pulled in as a
     # recommendation on some Debian releases. Pin it out so no upgrade can ever bring it back.
@@ -66,7 +67,7 @@
 
     - name: Install packages
       ansible.builtin.apt:
-        name: "{{ ['cups', 'cups-filters', 'avahi-daemon', 'ufw', 'unattended-upgrades'] + driver_packages }}"
+        name: "{{ ['cups', 'cups-filters', 'avahi-daemon', 'ufw', 'unattended-upgrades', 'uhubctl'] + driver_packages }}"
         state: present
       tags: [packages]
 
