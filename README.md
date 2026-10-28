@@ -46,6 +46,8 @@ First boot configures everything by itself (a few minutes). If the printer is of
 
 `build/printsrv.img` contains your SSH public key and settings, no secrets.
 
+`make image-lock` records the exact Raspberry Pi OS release and checksum in `image/base-image.lock`; commit it so every `make image` builds from the same base. Without the lock, `make image` warns and uses the newest release. Re-run `make image-lock` when you decide to move to a newer release.
+
 <details>
 <summary>Without the image (stock Raspberry Pi OS)</summary>
 

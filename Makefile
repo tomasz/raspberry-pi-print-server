@@ -2,9 +2,12 @@
 ANSIBLE_DIR := ansible
 PRINTER     ?= $(shell awk '$$1 == "printer_name:" {print $$2}' $(ANSIBLE_DIR)/group_vars/all.yml)
 HOST        ?= $(shell awk '$$1 == "ansible_host:" {print $$2}' $(ANSIBLE_DIR)/inventory.yml)
+PIOS_URL    ?= https://downloads.raspberrypi.com/raspios_lite_arm64_latest
+# For a fully reproducible build pin by digest, e.g. BUILD_IMAGE=debian@sha256:...
+# (docker pull debian:trixie && docker inspect --format '{{index .RepoDigests 0}}' debian:trixie)
 BUILD_IMAGE ?= debian:trixie
 
-.PHONY: help deps ping plan apply upgrade status logs unjam testpage usb-cycle reboot forget image lint
+.PHONY: help deps ping plan apply upgrade status logs unjam testpage usb-cycle reboot forget image image-lock lint
 
 help:   ## List targets
 > @awk -F':.*## ' '/^[a-z-]+:.*## / {printf "  make %-10s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -53,6 +56,11 @@ image:  ## Build a ready-to-flash SD card image: build/printsrv.img (needs Docke
 > docker run --rm --privileged --platform linux/arm64 \
 >   -v "$(CURDIR)":/src:ro -v "$(CURDIR)/build":/build \
 >   $(BUILD_IMAGE) bash /src/image/build.sh
+
+image-lock: ## Pin the newest Raspberry Pi OS release in image/base-image.lock (commit it)
+> url=$$(curl -fsSIL -o /dev/null -w '%{url_effective}' $(PIOS_URL)) && \
+> sha=$$(curl -fsSL "$$url.sha256" | awk '{print $$1}') && \
+> printf 'url=%s\nsha256=%s\n' "$$url" "$$sha" | tee image/base-image.lock
 
 lint:   ## ansible-lint, shellcheck, playbook syntax check (same as CI)
 > cd $(ANSIBLE_DIR) && ansible-lint site.yml && ansible-playbook --syntax-check -i printsrv, site.yml

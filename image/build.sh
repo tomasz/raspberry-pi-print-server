@@ -9,6 +9,7 @@ OUT=/build
 ROOT=/mnt/root
 IMG="$OUT/printsrv.img"
 PIOS_URL="${PIOS_URL:-https://downloads.raspberrypi.com/raspios_lite_arm64_latest}"
+LOCK="$SRC/image/base-image.lock"   # written by `make image-lock`: the exact release and checksum to build from
 GROW_ROOT_MB="${GROW_ROOT_MB:-1536}"
 
 log() { printf '\n==> %s\n' "$*"; }
@@ -35,16 +36,25 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends ca-certificates curl xz-utils fdisk e2fsprogs >/dev/null
 
-# ---------- Base image (cached in build/cache, checksum-verified) ----------
+# ---------- Base image (pinned by image/base-image.lock; cached in build/cache) ----------
 mkdir -p "$OUT/cache"
-url=$(curl -fsSIL -o /dev/null -w '%{url_effective}' "$PIOS_URL")
+if [[ -f "$LOCK" ]]; then
+  url=$(sed -n 's/^url=//p' "$LOCK")
+  expected=$(sed -n 's/^sha256=//p' "$LOCK")
+  [[ -n "$url" && -n "$expected" ]] || die "image/base-image.lock is malformed; run \`make image-lock\`."
+  log "Base image pinned by image/base-image.lock: $(basename "$url")"
+else
+  printf 'WARNING: image/base-image.lock missing; using the newest Raspberry Pi OS release.\n' >&2
+  printf '         Run make image-lock and commit the result for reproducible builds.\n' >&2
+  url=$(curl -fsSIL -o /dev/null -w '%{url_effective}' "$PIOS_URL")
+  expected=$(curl -fsSL "$url.sha256" | awk '{print $1}')
+fi
 base="$OUT/cache/$(basename "$url")"
 if [[ ! -f "$base" ]]; then
   log "Downloading $(basename "$url")"
   curl -fL --progress-bar -o "$base.part" "$url"
   mv "$base.part" "$base"
 fi
-expected=$(curl -fsSL "$url.sha256" | awk '{print $1}')
 echo "$expected  $base" | sha256sum -c --quiet || { rm -f "$base"; die "Checksum mismatch; deleted $base, re-run."; }
 
 log "Unpacking and growing the root partition by ${GROW_ROOT_MB} MB"
