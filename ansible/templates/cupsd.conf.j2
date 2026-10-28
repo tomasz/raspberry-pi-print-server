@@ -1,8 +1,8 @@
 # {{ ansible_managed }}
 # CUPS print server: LAN-only access, AirPrint via Avahi, admin changes only via Ansible.
 
+# Logs go to the journal (ErrorLog/AccessLog syslog in cups-files.conf); no page log.
 LogLevel warn
-MaxLogSize 1m
 PageLogFormat
 
 # Listen on all interfaces; the firewall (ufw) restricts access to {{ lan_cidr }}.

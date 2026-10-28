@@ -28,6 +28,16 @@
         reboot_timeout: 600
       when: not (image_build | default(false))  # the image build pre-applies boot config; nothing to reboot
 
+    - name: Reexec systemd
+      ansible.builtin.systemd_service:
+        daemon_reexec: true
+      when: not (image_build | default(false))  # no running systemd inside the image-build chroot
+
+    - name: Restart journald
+      ansible.builtin.service:
+        name: systemd-journald
+        state: restarted
+
   tasks:
     # ---------- Base system ----------
     - name: Set timezone
@@ -76,6 +86,49 @@
           dtparam=poe_fan_temp3=80000,poe_fan_temp3_hyst=2000
       notify: Reboot
       tags: [bootconfig]
+
+    # A hung kernel reboots itself instead of waiting for someone to reach the Pi.
+    - name: Enable hardware watchdog
+      ansible.builtin.lineinfile:
+        path: /boot/firmware/config.txt
+        line: dtparam=watchdog=on
+        insertafter: EOF
+      notify: Reboot
+      tags: [bootconfig]
+
+    - name: Create systemd drop-in directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - /etc/systemd/system.conf.d
+        - /etc/systemd/journald.conf.d
+      tags: [bootconfig]
+
+    - name: Let systemd feed the hardware watchdog
+      ansible.builtin.copy:
+        dest: /etc/systemd/system.conf.d/10-watchdog.conf
+        content: |
+          [Manager]
+          RuntimeWatchdogSec=15s
+          RebootWatchdogSec=2min
+        mode: "0644"
+      notify: Reexec systemd
+      tags: [bootconfig]
+
+    # ---------- Observability ----------
+    # Raspberry Pi OS keeps the journal in RAM: after an unattended reboot or a crash there is nothing
+    # to read. Persist it, bounded so it can never fill the card.
+    - name: Persist a bounded journal across reboots
+      ansible.builtin.copy:
+        dest: /etc/systemd/journald.conf.d/10-persistent.conf
+        content: |
+          [Journal]
+          Storage=persistent
+          SystemMaxUse=64M
+        mode: "0644"
+      notify: Restart journald
 
     - name: Stop Bluetooth UART service
       ansible.builtin.service:
@@ -152,6 +205,17 @@
         state: started
 
     # ---------- CUPS ----------
+    # One place to look: `journalctl -u cups` instead of files under /var/log/cups.
+    - name: Send CUPS logs to the journal
+      ansible.builtin.lineinfile:
+        path: /etc/cups/cups-files.conf
+        regexp: '^#?\s*{{ item }}\s'
+        line: "{{ item }} syslog"
+        insertafter: EOF
+        validate: /usr/sbin/cupsd -t -s %s
+      loop: [ErrorLog, AccessLog]
+      notify: Restart cups
+
     - name: Configure cupsd
       ansible.builtin.template:
         src: cupsd.conf.j2

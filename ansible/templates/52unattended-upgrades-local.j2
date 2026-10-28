@@ -6,5 +6,6 @@ Unattended-Upgrade::Origins-Pattern {
         "origin=Raspberry Pi Foundation,codename=${distro_codename},label=Raspberry Pi Foundation";
 };
 Unattended-Upgrade::Remove-Unused-Dependencies "true";
+Unattended-Upgrade::SyslogEnable "true";
 Unattended-Upgrade::Automatic-Reboot "true";
 Unattended-Upgrade::Automatic-Reboot-Time "{{ unattended_reboot_time }}";
